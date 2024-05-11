@@ -1,14 +1,11 @@
 package com.tugasakhir.signserver.dto;
 
+import lombok.AllArgsConstructor;
 import lombok.Data;
-import org.springframework.web.multipart.MultipartFile;
 
 @Data
-public class SignRequestDTO {
-    private String email;
-    private String passphrase;
-    private MultipartFile document;
-
+@AllArgsConstructor
+public class SignaturePosition {
     private Integer originX;
     private Integer originY;
     private Integer width;
