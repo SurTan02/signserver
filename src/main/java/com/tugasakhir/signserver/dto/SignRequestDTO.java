@@ -9,8 +9,5 @@ public class SignRequestDTO {
     private String passphrase;
     private MultipartFile document;
 
-    private Integer originX;
-    private Integer originY;
-    private Integer width;
-    private Integer height;
+    private SignAttribute signAttribute;
 }
