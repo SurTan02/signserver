@@ -61,7 +61,7 @@ public abstract class SignService{
     }
     @SuppressWarnings("unchecked")
     public byte[] signDocument(User user, byte[] document, SignAttribute signAttribute) throws Exception {
-        LOG.info("Start signDocument with one document");
+        LOG.info("Start signDocument one document for " + user.getEmail() + user.getName());
         byte[] userP12 = storageService.getPKCS12File(String.format("%s/%s", user.getEmail(), user.getEmail()));
         try (Pkcs12SignatureToken token = new Pkcs12SignatureToken(userP12, new KeyStore.PasswordProtection(user.getPassphrase().toCharArray()))) {
             DSSDocument toSignDocument = new InMemoryDocument(document);
