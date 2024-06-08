@@ -11,6 +11,9 @@ public class SignAttribute {
     private String signatureType;
     private MultipartFile signatureImg;
     private Boolean isVisibleSignature;
+    private String signatureFieldName;
+    private String location;
+    private String reason;
 
     private Integer originX;
     private Integer originY;

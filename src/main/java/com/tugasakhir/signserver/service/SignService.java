@@ -3,6 +3,8 @@ package com.tugasakhir.signserver.service;
 import com.tugasakhir.signserver.dto.SignAttribute;
 import com.tugasakhir.signserver.dto.User;
 import eu.europa.esig.dss.AbstractSignatureParameters;
+import eu.europa.esig.dss.cades.CAdESSignatureParameters;
+import eu.europa.esig.dss.cades.signature.CAdESService;
 import eu.europa.esig.dss.model.*;
 import eu.europa.esig.dss.pades.PAdESSignatureParameters;
 import eu.europa.esig.dss.pades.signature.PAdESService;
@@ -17,21 +19,31 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.security.KeyStore;
 import java.security.SignatureException;
-
-public abstract class SignService{
+public abstract class SignService<T>{
     private static final Logger LOG = LoggerFactory.getLogger(SignService.class);
     protected final StorageService storageService;
+
     @SuppressWarnings("rawtypes")
     protected DocumentSignatureService service;
-
     @SuppressWarnings("rawtypes")
-    private AbstractSignatureParameters parameters;
+    protected AbstractSignatureParameters parameters;
     protected static final CommonCertificateVerifier commonCertificateVerifier = CommonCertificateVerifierSingleton.getInstance();
 
-    public SignService(StorageService storageService) {
+    public SignService(StorageService storageService, String signatureType) {
         this.storageService = storageService;
-        this.service = new PAdESService((commonCertificateVerifier));
-        this.parameters = new PAdESSignatureParameters();
+
+        switch (signatureType){
+            case "PADES":
+                this.service = new PAdESService(commonCertificateVerifier);
+                this.parameters = new PAdESSignatureParameters();
+                break;
+            case "CADES":
+                this.service = new CAdESService(commonCertificateVerifier);
+                this.parameters = new CAdESSignatureParameters();
+                break;
+            default:
+                LOG.error("Unknown Signature Type");
+        }
 
         // Set the Timestamp source
         String tspServer = "https://freetsa.org/tsr";
@@ -48,35 +60,26 @@ public abstract class SignService{
             LOG.info("End getDataToSign with one document");
             return toBeSigned;
         } catch (Exception e) {
+            LOG.error("getDataToSign Error:" + e.getMessage());
             throw new SignatureException(e.getMessage(), e);
         }
     }
 
-    public Pkcs12SignatureToken getUserToken(byte[] userP12, String passphrase) throws Exception {
-        try (Pkcs12SignatureToken token = new Pkcs12SignatureToken(userP12, new KeyStore.PasswordProtection(passphrase.toCharArray()))){
-            return token;
-        } catch (Exception e) {
-            throw new Exception(e.getCause().getMessage());
-        }
-    }
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public byte[] signDocument(User user, byte[] document, SignAttribute signAttribute) throws Exception {
-        LOG.info("Start signDocument one document for " + user.getEmail() + user.getName());
+        LOG.info("Start signDocument one document for {} {}", user.getEmail(), user.getName());
         byte[] userP12 = storageService.getPKCS12File(String.format("%s/%s", user.getEmail(), user.getEmail()));
         try (Pkcs12SignatureToken token = new Pkcs12SignatureToken(userP12, new KeyStore.PasswordProtection(user.getPassphrase().toCharArray()))) {
             DSSDocument toSignDocument = new InMemoryDocument(document);
-
-            // Get p12 file
-            DSSPrivateKeyEntry entry = token.getKeys().get(0);
-//            setParams(entry, user, signaturePosition);
-            parameters = getParams(entry, user, signAttribute);
-            // Get the ToBeSigned data
+            DSSPrivateKeyEntry privateKeyEntry = token.getKeys().get(0);
+            this.parameters = (AbstractSignatureParameters) getParams(privateKeyEntry, user, signAttribute, toSignDocument);
             ToBeSigned dataToSign = getDataToSign(document);
-            // Sign the data
-            SignatureValue signatureValue = token.sign(dataToSign, this.parameters.getDigestAlgorithm(), entry);
+
+            SignatureValue signatureValue = token.sign(dataToSign, this.parameters.getDigestAlgorithm(), privateKeyEntry);
             // Create the final signed document
             DSSDocument signedDocument = service.signDocument(toSignDocument, this.parameters, signatureValue);
-            LOG.info("Finish signDocument with one document");
+            signedDocument.save("test.p7b");
+            LOG.info("Finish signDocument with one document {}", signedDocument.getMimeType());
             return signedDocument.openStream().readAllBytes();
 
         } catch (Exception e) {
@@ -84,5 +87,7 @@ public abstract class SignService{
             throw e;
         }
     }
-    public abstract PAdESSignatureParameters getParams(DSSPrivateKeyEntry entry, User user, SignAttribute signAttribute) throws IOException;
+
+    public abstract T getParams(DSSPrivateKeyEntry entry, User user, SignAttribute signAttribute, DSSDocument toSignDocument) throws IOException;
+
 }

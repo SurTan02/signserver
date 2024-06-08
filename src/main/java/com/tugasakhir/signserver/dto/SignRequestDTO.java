@@ -7,6 +7,7 @@ import org.springframework.web.multipart.MultipartFile;
 public class SignRequestDTO {
     private String passphrase;
     private MultipartFile document;
+    private String hash;
 
     private SignAttribute signAttribute;
 }
