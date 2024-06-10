@@ -26,19 +26,24 @@ import java.util.List;
 @Service
 public class PDFSigningService extends SignService<PAdESSignatureParameters>{
     private static final Logger LOG = LoggerFactory.getLogger(PDFSigningService.class);
-    private PAdESSignatureParameters parameters;
     public PDFSigningService(StorageService storageService){
         super(storageService, "PADES");
         this.parameters = new PAdESSignatureParameters();
     }
     @Override
     public PAdESSignatureParameters getParams(DSSPrivateKeyEntry entry, User user, SignAttribute signAttribute, DSSDocument toSignDocument){
+        PAdESSignatureParameters pAdESSignatureParameters = this.getParams(user, signAttribute, toSignDocument);
+        pAdESSignatureParameters.setSigningCertificate(entry.getCertificate());
+        pAdESSignatureParameters.setCertificateChain(entry.getCertificateChain());
+
+        return  pAdESSignatureParameters;
+    }
+
+    public PAdESSignatureParameters getParams(User user, SignAttribute signAttribute, DSSDocument toSignDocument){
         try {
             PAdESSignatureParameters pAdESSignatureParameters = new PAdESSignatureParameters();
             pAdESSignatureParameters.setDigestAlgorithm(DigestAlgorithm.SHA256);
             pAdESSignatureParameters.setSignatureLevel(SignatureLevel.PAdES_BASELINE_LT);
-            pAdESSignatureParameters.setSigningCertificate(entry.getCertificate());
-            pAdESSignatureParameters.setCertificateChain(entry.getCertificateChain());
             pAdESSignatureParameters.setLocation(signAttribute.getLocation());
             pAdESSignatureParameters.setReason(signAttribute.getReason());
 
@@ -69,8 +74,6 @@ public class PDFSigningService extends SignService<PAdESSignatureParameters>{
             SignatureFieldParameters fieldParameters = getSignatureField(signAttribute, toSignDocument);
             SignatureImageParameters imageParameters = new SignatureImageParameters();
             imageParameters.setImage(imageDSS);
-            imageParameters.setAlignmentHorizontal(VisualSignatureAlignmentHorizontal.CENTER);
-            imageParameters.setAlignmentVertical(VisualSignatureAlignmentVertical.MIDDLE);
             imageParameters.setFieldParameters(fieldParameters);
             return imageParameters;
         } catch (Exception e){
@@ -85,6 +88,7 @@ public class PDFSigningService extends SignService<PAdESSignatureParameters>{
 
             IPdfObjFactory pdfObjFactory = new ServiceLoaderPdfObjFactory();
             PDFSignatureService pdfSignatureService = pdfObjFactory.newPAdESSignatureService();
+
             List<String> preparedFields = pdfSignatureService.getAvailableSignatureFields(toSignDocument);
 
             if (preparedFields.contains(signAttribute.getSignatureFieldName())){
@@ -96,6 +100,7 @@ public class PDFSigningService extends SignService<PAdESSignatureParameters>{
                 fieldParameters.setOriginY(signAttribute.getOriginY());
                 fieldParameters.setWidth(signAttribute.getWidth());
                 fieldParameters.setHeight(signAttribute.getHeight());
+                pdfSignatureService.addNewSignatureField(toSignDocument, fieldParameters);
             }
 
             return fieldParameters;
@@ -105,34 +110,25 @@ public class PDFSigningService extends SignService<PAdESSignatureParameters>{
         }
     }
 
-    public byte[] signDigest(User user, byte[] document, String hashOfDocument, SignAttribute signAttribute) throws Exception {
+    public byte[] clientSignWithHash(User user, byte[] document, SignAttribute signAttribute) throws Exception {
         LOG.info("Start sign digest of one digest for " + user.getEmail() + user.getName());
-        byte[] userP12 = storageService.getPKCS12File(String.format("%s/%s", user.getEmail(), user.getEmail()));
-        try (Pkcs12SignatureToken token = new Pkcs12SignatureToken(userP12, new KeyStore.PasswordProtection(user.getPassphrase().toCharArray()))) {
+        try {
             DSSDocument toSignDocument = new InMemoryDocument(document);
-            DSSPrivateKeyEntry privateKeyEntry = token.getKeys().get(0);
 
-            this.parameters = getParams(privateKeyEntry, user, signAttribute, toSignDocument);
+            PAdESSignatureParameters pAdESSignatureParameters = this.getParams(user, signAttribute, toSignDocument);
 
             PAdESWithExternalCMSService service = new PAdESWithExternalCMSService();
+
             service.setCertificateVerifier(commonCertificateVerifier);
-            String tspServer = "https://freetsa.org/tsr";
-            OnlineTSPSource onlineTSPSource = new OnlineTSPSource(tspServer);
+            OnlineTSPSource onlineTSPSource = new OnlineTSPSource("https://freetsa.org/tsr");
             service.setTspSource(onlineTSPSource);
 
+
             // Prepare the PDF signature revision and compute message-digest of the byte range content
-            DSSMessageDigest messageDigest = service.getMessageDigest(toSignDocument, this.parameters);
-            DSSDocument cmsSignature = getExternalCMSSignature(user, messageDigest);
+            DSSMessageDigest messageDigest = service.getMessageDigest(toSignDocument, pAdESSignatureParameters);
+            DSSDocument cmsSignature = signDigest(user, messageDigest, signAttribute);
 
-
-            // BATAS SUCI - SESUAI CMD
-            DigestDocument digestDocument = new DigestDocument();
-            digestDocument.addDigest(DigestAlgorithm.SHA256, toSignDocument.getDigest(DigestAlgorithm.SHA256));
-            LOG.info("digest suci {}", digestDocument.getExistingDigest());
-            // BATAS SUCI - SESUAI CMD
-
-            DSSDocument signedDocument = service.signDocument(toSignDocument, this.parameters, cmsSignature);
-
+            DSSDocument signedDocument = service.signDocument(toSignDocument, pAdESSignatureParameters, cmsSignature);
             return signedDocument.openStream().readAllBytes();
         } catch (Exception e) {
             LOG.error("SignDigest Error:" + e.getMessage());
@@ -140,17 +136,16 @@ public class PDFSigningService extends SignService<PAdESSignatureParameters>{
         }
     }
 
-    public DSSDocument getExternalCMSSignature(User user, DSSMessageDigest messageDigest){
+    public DSSDocument signDigest(User user, DSSMessageDigest messageDigest, SignAttribute signAttribute){
         LOG.info("getExternalCMSSignature for " + user.getEmail() + user.getName());
         byte[] userP12 = storageService.getPKCS12File(String.format("%s/%s", user.getEmail(), user.getEmail()));
         try (Pkcs12SignatureToken token = new Pkcs12SignatureToken(userP12, new KeyStore.PasswordProtection(user.getPassphrase().toCharArray()))) {
             DSSPrivateKeyEntry privateKeyEntry = token.getKeys().get(0);
 
             ExternalCMSService padesCMSGeneratorService = new ExternalCMSService(commonCertificateVerifier);
-            PAdESSignatureParameters signatureParameters = new PAdESSignatureParameters();
-            signatureParameters.setSigningCertificate(privateKeyEntry.getCertificate());
-            signatureParameters.setCertificateChain(privateKeyEntry.getCertificateChain());
+            PAdESSignatureParameters signatureParameters = this.getParams(user, signAttribute, null);
             signatureParameters.setSignatureLevel(SignatureLevel.PAdES_BASELINE_B);
+
 
             // Create DTBS (data to be signed) using the message-digest of a PDF signature byte range obtained from a client
             ToBeSigned dataToSign = padesCMSGeneratorService.getDataToSign(messageDigest, signatureParameters);
@@ -161,7 +156,7 @@ public class PDFSigningService extends SignService<PAdESSignatureParameters>{
             return padesCMSGeneratorService.signMessageDigest(messageDigest, signatureParameters, signatureValue);
 
         } catch (Exception e) {
-            LOG.error("SignDigest Error:" + e.getMessage());
+            LOG.error("getExternalCMSSignature  Error:" + e.getMessage());
             throw e;
         }
     }
