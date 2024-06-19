@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.stream.Collectors;
 
+import eu.europa.esig.dss.alert.exception.AlertException;
 import org.springframework.context.support.DefaultMessageSourceResolvable;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -39,6 +40,15 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler({ IllegalArgumentException.class, NoSuchElementException.class })
     public ResponseEntity<Object> handleIllegalArgumentException(Exception ex) {
+
+        Map<String, String> body = new HashMap<>();
+        body.put("error", ex.getMessage());
+
+        return new ResponseEntity<>(body, HttpStatus.BAD_REQUEST);
+    }
+
+    @ExceptionHandler({ AlertException.class })
+    public ResponseEntity<Object> handleAlertException(Exception ex) {
 
         Map<String, String> body = new HashMap<>();
         body.put("error", ex.getMessage());
