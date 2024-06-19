@@ -134,22 +134,19 @@ public class SigningController {
 
     @PostMapping(value = "/pdf/digest")
     @PreAuthorize("hasAuthority('SCOPE_Certificate.Read')")
-    public ResponseEntity<byte[]> uploadFile(@AuthenticationPrincipal Jwt jwt, @ModelAttribute SignRequestDTO signRequestDTO) throws Exception {
+    public ResponseEntity<byte[]> uploadFile(@AuthenticationPrincipal Jwt jwt, @ModelAttribute SignRequestDTO signRequestDTO){
         try{
             Object preferred_username = jwt.getClaim("preferred_username");
             Object full_name = jwt.getClaim("name");
             User user = new User((String) preferred_username, (String) full_name, signRequestDTO.getPassphrase());
-            byte[] signedDocument = pdfSignService.clientSignWithHash(
+            byte[] signedDigest = pdfSignService.signDigestFromClient(
                     user,
-                    signRequestDTO.getDocument().getBytes(),
+                    signRequestDTO.getHash(),
                     signRequestDTO.getSignAttribute()
             );
-            return SignResponseDTO.builder()
-                    .filename("signed_" + signRequestDTO.getDocument().getOriginalFilename())
-                    .contentType(MediaType.APPLICATION_PDF)
-                    .document(signedDocument)
-                    .build()
-                    .toResponseEntity();
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                    .body(signedDigest);
         } catch (Exception e) {
             LOG.error("Error:" + e.getMessage());
             throw e;

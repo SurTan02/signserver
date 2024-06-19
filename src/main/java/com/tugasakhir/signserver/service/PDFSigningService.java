@@ -9,11 +9,9 @@ import eu.europa.esig.dss.pades.PAdESSignatureParameters;
 import eu.europa.esig.dss.pades.SignatureFieldParameters;
 import eu.europa.esig.dss.pades.SignatureImageParameters;
 import eu.europa.esig.dss.pades.signature.ExternalCMSService;
-import eu.europa.esig.dss.pades.signature.PAdESWithExternalCMSService;
 import eu.europa.esig.dss.pdf.IPdfObjFactory;
 import eu.europa.esig.dss.pdf.PDFSignatureService;
 import eu.europa.esig.dss.pdf.ServiceLoaderPdfObjFactory;
-import eu.europa.esig.dss.service.tsp.OnlineTSPSource;
 import eu.europa.esig.dss.token.DSSPrivateKeyEntry;
 import eu.europa.esig.dss.token.Pkcs12SignatureToken;
 import org.slf4j.Logger;
@@ -110,42 +108,28 @@ public class PDFSigningService extends SignService<PAdESSignatureParameters>{
         }
     }
 
-    public byte[] clientSignWithHash(User user, byte[] document, SignAttribute signAttribute) throws Exception {
-        LOG.info("Start sign digest of one digest for " + user.getEmail() + user.getName());
-        try {
-            DSSDocument toSignDocument = new InMemoryDocument(document);
-
-            PAdESSignatureParameters pAdESSignatureParameters = this.getParams(user, signAttribute, toSignDocument);
-
-            PAdESWithExternalCMSService service = new PAdESWithExternalCMSService();
-
-            service.setCertificateVerifier(commonCertificateVerifier);
-            OnlineTSPSource onlineTSPSource = new OnlineTSPSource("https://freetsa.org/tsr");
-            service.setTspSource(onlineTSPSource);
-
-
-            // Prepare the PDF signature revision and compute message-digest of the byte range content
-            DSSMessageDigest messageDigest = service.getMessageDigest(toSignDocument, pAdESSignatureParameters);
-            DSSDocument cmsSignature = signDigest(user, messageDigest, signAttribute);
-
-            DSSDocument signedDocument = service.signDocument(toSignDocument, pAdESSignatureParameters, cmsSignature);
-            return signedDocument.openStream().readAllBytes();
-        } catch (Exception e) {
-            LOG.error("SignDigest Error:" + e.getMessage());
-            throw e;
+    public byte[] hexToByteArray(String hex) {
+        int len = hex.length();
+        byte[] data = new byte[len / 2];
+        for (int i = 0; i < len; i += 2) {
+            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
+                    + Character.digit(hex.charAt(i+1), 16));
         }
+        return data;
     }
-
-    public DSSDocument signDigest(User user, DSSMessageDigest messageDigest, SignAttribute signAttribute){
+    public byte[] signDigestFromClient(User user, String messageDigestHex, SignAttribute signAttribute){
         LOG.info("getExternalCMSSignature for " + user.getEmail() + user.getName());
+
         byte[] userP12 = storageService.getPKCS12File(String.format("%s/%s", user.getEmail(), user.getEmail()));
         try (Pkcs12SignatureToken token = new Pkcs12SignatureToken(userP12, new KeyStore.PasswordProtection(user.getPassphrase().toCharArray()))) {
             DSSPrivateKeyEntry privateKeyEntry = token.getKeys().get(0);
 
-            ExternalCMSService padesCMSGeneratorService = new ExternalCMSService(commonCertificateVerifier);
-            PAdESSignatureParameters signatureParameters = this.getParams(user, signAttribute, null);
-            signatureParameters.setSignatureLevel(SignatureLevel.PAdES_BASELINE_B);
+            byte[] messageDigestByte = hexToByteArray(messageDigestHex);
+            DSSMessageDigest messageDigest = new DSSMessageDigest(DigestAlgorithm.SHA256, messageDigestByte);
 
+            ExternalCMSService padesCMSGeneratorService = new ExternalCMSService(commonCertificateVerifier);
+            PAdESSignatureParameters signatureParameters = this.getParams(privateKeyEntry, user, signAttribute, null);
+            signatureParameters.setSignatureLevel(SignatureLevel.PAdES_BASELINE_B);
 
             // Create DTBS (data to be signed) using the message-digest of a PDF signature byte range obtained from a client
             ToBeSigned dataToSign = padesCMSGeneratorService.getDataToSign(messageDigest, signatureParameters);
@@ -153,7 +137,7 @@ public class PDFSigningService extends SignService<PAdESSignatureParameters>{
             SignatureValue signatureValue = token.sign(dataToSign, signatureParameters.getDigestAlgorithm(), privateKeyEntry);
 
             // Create a CMS signature using the provided message-digest, signature parameters and the signature value
-            return padesCMSGeneratorService.signMessageDigest(messageDigest, signatureParameters, signatureValue);
+            return padesCMSGeneratorService.signMessageDigest(messageDigest, signatureParameters, signatureValue).getBytes();
 
         } catch (Exception e) {
             LOG.error("getExternalCMSSignature  Error:" + e.getMessage());
